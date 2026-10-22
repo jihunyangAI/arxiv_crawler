@@ -198,14 +198,37 @@ def _list_url(category: str) -> str:
 
 
 def _load_papers() -> pd.DataFrame:
-    path = OUTPUT_CSV if OUTPUT_CSV.is_file() else PAPER_CSV
-    if not path.is_file():
+    """수집본을 기준으로 삼고, 있는 요약만 붙인다."""
+    if PAPER_CSV.is_file():
+        papers = pd.read_csv(PAPER_CSV, dtype=str).fillna("")
+        papers = papers.drop_duplicates("arxiv_id")
+        saved = _saved_summaries()
+        if not saved.empty:
+            summary_cols = [column for column in SUMMARY_COLUMNS if column in saved.columns]
+            papers = papers.drop(columns=[column for column in summary_cols if column in papers.columns])
+            papers = papers.merge(saved[["arxiv_id", *summary_cols]], on="arxiv_id", how="left")
+        for column in SUMMARY_COLUMNS:
+            if column not in papers.columns:
+                papers[column] = ""
+            papers[column] = papers[column].fillna("")
+        return papers
+
+    if not OUTPUT_CSV.is_file():
         return pd.DataFrame()
-    papers = pd.read_csv(path, dtype=str).fillna("")
+    papers = pd.read_csv(OUTPUT_CSV, dtype=str).fillna("")
     for column in SUMMARY_COLUMNS:
         if column not in papers.columns:
             papers[column] = ""
     return papers
+
+
+def _saved_summaries() -> pd.DataFrame:
+    if not OUTPUT_CSV.is_file():
+        return pd.DataFrame()
+    saved = pd.read_csv(OUTPUT_CSV, dtype=str).fillna("")
+    if "arxiv_id" not in saved.columns:
+        return pd.DataFrame()
+    return saved.drop_duplicates("arxiv_id")
 
 
 def _saved_count() -> int:
