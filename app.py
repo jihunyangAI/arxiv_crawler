@@ -136,27 +136,38 @@ def render_summary() -> None:
 
     if st.button("빠진 요약 채우기", type="primary", disabled=missing == 0):
         on_status, progress = _bind_progress()
-        with st.spinner("요약하는 중입니다."):
-            result = process_all_papers(on_status=on_status)
-        progress.progress(100)
-        filled = int(result["summary_one_line"].fillna("").str.strip().ne("").sum())
-        st.success(f"요약 {filled}편을 {OUTPUT_CSV.name}에 저장했습니다.")
+        try:
+            with st.spinner("요약하는 중입니다."):
+                result = process_all_papers(on_status=on_status)
+        except Exception as exc:
+            st.error(f"요약을 저장하지 못했습니다. {exc}")
+        else:
+            progress.progress(100)
+            filled = int(result["summary_one_line"].fillna("").str.strip().ne("").sum())
+            st.success(f"요약 {filled}편을 {OUTPUT_CSV.name}에 저장했습니다.")
 
     labels = [f"{row.arxiv_id} · {row.title}" for row in papers.itertuples(index=False)]
     selected = st.selectbox("논문 하나 요약", labels)
     if st.button("선택한 논문 요약"):
         arxiv_id = selected.split(" · ", 1)[0]
         paper = papers[papers["arxiv_id"] == arxiv_id].iloc[0]
-        with st.spinner("이 논문을 요약하는 중입니다."):
-            summary = summarize_paper(str(paper["title"]), str(paper["abstract"]))
-            _save_one_summary(papers, arxiv_id, summary)
-        st.success(summary["summary_one_line"])
-        _show_summary_fields(pd.Series({
-            "summary_one_line": summary["summary_one_line"],
-            "summary_easy": summary["summary_easy"],
-            "read_world": summary["real_world"],
-            "limitations": summary["limitation"],
-        }))
+        try:
+            with st.spinner("이 논문을 요약하는 중입니다."):
+                summary = summarize_paper(str(paper["title"]), str(paper["abstract"]))
+                try:
+                    _save_one_summary(papers, arxiv_id, summary)
+                except OSError as exc:
+                    st.warning(f"요약은 만들었지만 파일에는 저장하지 못했습니다. {exc}")
+        except Exception as exc:
+            st.error(f"이 논문 요약을 만들지 못했습니다. {exc}")
+        else:
+            st.success(summary["summary_one_line"])
+            _show_summary_fields(pd.Series({
+                "summary_one_line": summary["summary_one_line"],
+                "summary_easy": summary["summary_easy"],
+                "read_world": summary["real_world"],
+                "limitations": summary["limitation"],
+            }))
 
 
 def render_stats() -> None:

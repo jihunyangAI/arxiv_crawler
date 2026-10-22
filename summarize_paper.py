@@ -80,19 +80,23 @@ def summarize_paper(title: str, abstract: str) -> dict[str, str]:
     )
     prompt = _user_prompt(title, abstract)
     model, summary = _generate_with_fallback(client, prompt)
-    summary = _normalize_summary(summary)
+    summary = _coerce_summary(summary)
     problems = _format_problems(summary)
-    if problems:
-        summary = _normalize_summary(
-            _generate_summary(
-                client,
-                model,
-                _repair_prompt(prompt, summary, problems),
+    if problems and summary.summary_one_line.strip():
+        try:
+            repaired = _coerce_summary(
+                _generate_summary(
+                    client,
+                    model,
+                    _repair_prompt(prompt, summary, problems),
+                )
             )
-        )
-        problems = _format_problems(summary)
-        if problems:
-            raise ValueError("요약 형식이 맞지 않습니다: " + "; ".join(problems))
+        except (errors.APIError, TimeoutError, ValueError, json.JSONDecodeError):
+            repaired = None
+        if repaired and repaired.summary_one_line.strip():
+            summary = repaired
+    if not summary.summary_one_line.strip():
+        raise RuntimeError("요약을 만들지 못했습니다.")
     return summary.model_dump()
 
 
@@ -166,30 +170,50 @@ def _repair_prompt(prompt: str, summary: PaperSummary, problems: list[str]) -> s
     )
 
 
-def _normalize_summary(summary: PaperSummary) -> PaperSummary:
-    """한 줄로 붙은 적용·한계 문장을 요청한 줄 수로 나눈다."""
-    one_line = summary.summary_one_line.replace("\n", " ").strip().rstrip(".!?。")
-    easy = " ".join(part.strip() for part in summary.summary_easy.splitlines() if part.strip())
+def _coerce_summary(summary: PaperSummary) -> PaperSummary:
+    """길이와 줄 수를 화면 형식에 맞춘다. 부족한 내용은 버리지 않는다."""
+    easy = _fit_sentences(summary.summary_easy, 4)
+    one_line = _fit_one_line(summary.summary_one_line) or _fit_one_line(easy)
     return PaperSummary(
         summary_one_line=one_line,
         summary_easy=easy,
-        real_world=_as_lines(summary.real_world, 2, 3),
-        limitation=_as_lines(summary.limitation, 1, 2),
+        real_world=_fit_lines(summary.real_world, 3),
+        limitation=_fit_lines(summary.limitation, 2),
     )
 
 
-def _as_lines(text: str, minimum: int, maximum: int) -> str:
+def _fit_one_line(text: str) -> str:
+    one_line = re.sub(r"[.!?。\n]", " ", text)
+    one_line = re.sub(r"\s+", " ", one_line).strip()
+    return one_line[:20].rstrip()
+
+
+def _fit_sentences(text: str, maximum: int) -> str:
+    sentences = _sentences(text)
+    if len(sentences) > maximum:
+        sentences = sentences[:maximum]
+    return " ".join(sentences)
+
+
+def _fit_lines(text: str, maximum: int) -> str:
     lines = _lines(text)
-    if minimum <= len(lines) <= maximum:
+    if len(lines) > maximum:
+        lines = lines[:maximum]
+    if len(lines) > 1:
         return "\n".join(lines)
-    sentences = [
-        part.strip()
-        for part in re.split(r"(?<=[.!?。])\s+", text.replace("\n", " ").strip())
-        if part.strip()
-    ]
-    if minimum <= len(sentences) <= maximum:
+    sentences = _sentences(text)
+    if len(sentences) > maximum:
+        sentences = sentences[:maximum]
+    if len(sentences) > 1:
         return "\n".join(sentences)
-    return text.strip()
+    if lines:
+        return lines[0]
+    return ""
+
+
+def _sentences(text: str) -> list[str]:
+    flat = " ".join(part.strip() for part in text.splitlines() if part.strip())
+    return [part.strip() for part in re.split(r"(?<=[.!?。])\s+", flat) if part.strip()]
 
 
 def _format_problems(summary: PaperSummary) -> list[str]:
